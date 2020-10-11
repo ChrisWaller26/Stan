@@ -1,3 +1,13 @@
+---
+title: "Stan User Guide Models"
+author: "Chris Waller"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
 #####     Load Packages     #####
 
 library(rstan)
@@ -12,9 +22,13 @@ options(mc.cores = 6)
 
 n_samples = 1e4
 
-#####     Stan Models     #####
+```
 
-#### 1.1 Linear Regression ####
+# Regression Models
+
+## Linear Regression
+
+```{r}
 
 x_1_1 = cbind(runif(n_samples), runif(n_samples))
 alpha_1_1 = 0.3
@@ -30,10 +44,28 @@ linear_reg_data =
     x = x_1_1
   )
 
-linear_reg_model =
-  stan_model(
-    "User Guide/1.1 Linear Regression.stan"
-  )
+```
+
+```{stan, output.var = "linear_reg_model"}
+
+data {
+  int<lower=0> N;   // number of data items
+  int<lower=0> K;   // number of predictors
+  matrix[N, K] x;   // predictor matrix
+  vector[N] y;      // outcome vector
+}
+parameters {
+  real alpha;           // intercept
+  vector[K] beta;       // coefficients for predictors
+  real<lower=0> sigma;  // error scale
+}
+model {
+  y ~ normal(alpha + x * beta, sigma);  // likelihood
+}
+
+```
+
+```{r}
 
 linear_reg_then = Sys.time()
 
@@ -41,13 +73,15 @@ linear_reg =
   sampling(
     linear_reg_model,
     data = linear_reg_data,
-    iter = 2000,
+    iter = 1000,
     chains = 3,
     refresh = 50,
-    warmup = 500
+    warmup = 250
   )
 
 linear_reg_time = difftime(Sys.time(), linear_reg_then)
+
+linear_reg_time
 
 linear_reg_out = rstan::extract(linear_reg)
 
@@ -101,7 +135,11 @@ ggplot() +
     scales = "free"
   )
 
-#### 1.2 The QR Reparameterization ####
+```
+
+## The QR Reparameterization
+
+```{r}
 
 x_1_2 = cbind(runif(n_samples), runif(n_samples))
 alpha_1_2 = 0.3
@@ -117,10 +155,41 @@ qr_reparam_data =
     x = x_1_2
   )
 
-qr_reparam_model =
-  stan_model(
-    "User Guide/1.2 The QR Reparameterization.stan"
-  )
+```
+
+```{stan, output.var = "qr_reparam_model"}
+
+data {
+  int<lower=0> N;   // number of data items
+  int<lower=0> K;   // number of predictors
+  matrix[N, K] x;   // predictor matrix
+  vector[N] y;      // outcome vector
+}
+transformed data {
+  matrix[N, K] Q_ast;
+  matrix[K, K] R_ast;
+  matrix[K, K] R_ast_inverse;
+  // thin and scale the QR decomposition
+  Q_ast = qr_Q(x)[, 1:K] * sqrt(N - 1);
+  R_ast = qr_R(x)[1:K, ] / sqrt(N - 1);
+  R_ast_inverse = inverse(R_ast);
+}
+parameters {
+  real alpha;           // intercept
+  vector[K] theta;      // coefficients on Q_ast
+  real<lower=0> sigma;  // error scale
+}
+model {
+  y ~ normal(Q_ast * theta + alpha, sigma);  // likelihood
+}
+generated quantities {
+  vector[K] beta;
+  beta = R_ast_inverse * theta; // coefficients on x
+}
+
+```
+
+```{r}
 
 qr_reparam_then = Sys.time()
 
@@ -128,13 +197,15 @@ qr_reparam =
   sampling(
     qr_reparam_model,
     data = qr_reparam_data,
-    iter = 2000,
+    iter = 1000,
     chains = 3,
     refresh = 50,
-    warmup = 500
+    warmup = 250
   )
 
 qr_reparam_time = difftime(Sys.time(), qr_reparam_then)
+
+qr_reparam_time
 
 qr_reparam_out = rstan::extract(qr_reparam)
 
@@ -188,7 +259,15 @@ ggplot() +
     scales = "free"
   )
 
-#### 1.4 Robust Noise Models ####
+```
+
+## Priors for Coefficients and Scales
+
+No model in this section.
+
+## Robust Noise Models
+
+```{r}
 
 x_1_4 = cbind(runif(n_samples), runif(n_samples))
 alpha_1_4 = 2
@@ -206,10 +285,42 @@ robust_noise_data =
     nu = nu_degf
   )
 
-robust_noise_model =
-  stan_model(
-    "User Guide/1.4 Robust Noise Models.stan"
-  )
+```
+
+```{stan, output.var = "robust_noise_model"}
+
+data {
+  int<lower=0> N;   // number of data items
+  int<lower=0> K;   // number of predictors
+  matrix[N, K] x;   // predictor matrix
+  vector[N] y;      // outcome vector
+  real<lower=0> nu; // Noise Degrees of freedom
+}
+transformed data {
+  matrix[N, K] Q_ast;
+  matrix[K, K] R_ast;
+  matrix[K, K] R_ast_inverse;
+  // thin and scale the QR decomposition
+  Q_ast = qr_Q(x)[, 1:K] * sqrt(N - 1);
+  R_ast = qr_R(x)[1:K, ] / sqrt(N - 1);
+  R_ast_inverse = inverse(R_ast);
+}
+parameters {
+  real alpha;           // intercept
+  vector[K] theta;      // coefficients on Q_ast
+  real<lower=0> sigma;  // error scale
+}
+model {
+  y ~ student_t(nu, Q_ast * theta + alpha, sigma);  // likelihood
+}
+generated quantities {
+  vector[K] beta;
+  beta = R_ast_inverse * theta; // coefficients on x
+}
+
+```
+
+```{r}
 
 robust_noise_then = Sys.time()
 
@@ -217,13 +328,15 @@ robust_noise =
   sampling(
     robust_noise_model,
     data = robust_noise_data,
-    iter = 2000,
+    iter = 1000,
     chains = 3,
     refresh = 50,
-    warmup = 500
+    warmup = 250
   )
 
 robust_noise_time = difftime(Sys.time(), robust_noise_then)
+
+robust_noise_time
 
 robust_noise_out = rstan::extract(robust_noise)
 
@@ -277,23 +390,52 @@ ggplot() +
     scales = "free"
   )
 
-#### 1.5 Logistic and Probit Regression ####
+```
 
+## Logistic and Probit Regression
+
+```{r}
+
+u_1_5 = runif(n_samples)
 x_1_5 = runif(n_samples)
 alpha_1_5 = 2
-logit_inv_1_5 = 1/(1 + exp(-alpha_1_5))
-y_1_5 = x_1_5 < logit_inv_1_5
+beta_1_5 = 0.1
+logit_inv_1_5 = 1/(1 + exp(-(alpha_1_5 + beta_1_5 * x_1_5)))
+y_1_5 = u_1_5 < logit_inv_1_5
 
 log_and_pro_data =
   list(
-    N  = n_samples,
-    y  = y_1_5
+    N = n_samples,
+    x = x_1_5, 
+    y = y_1_5
   )
 
-log_and_pro_model =
-  stan_model(
-    "User Guide/1.5 Logistic and Probit Regression.stan"
-  )
+```
+
+```{stan, output.var = "log_and_pro_model"}
+
+data {
+  int<lower=0> N;
+  vector[N] x;
+  int<lower=0,upper=1> y[N];
+}
+parameters {
+  real alpha;
+  real beta;
+}
+model {
+  
+  // Logistic
+  y ~ bernoulli_logit(alpha + beta * x);
+  
+  // Probit 
+  // y ~ bernoulli(Phi(alpha + beta * x));
+  
+}
+
+```
+
+```{r}
 
 log_and_pro_then = Sys.time()
 
@@ -301,13 +443,15 @@ log_and_pro =
   sampling(
     log_and_pro_model,
     data = log_and_pro_data,
-    iter = 2000,
+    iter = 1000,
     chains = 3,
     refresh = 50,
-    warmup = 500
+    warmup = 250
   )
 
 log_and_pro_time = difftime(Sys.time(), log_and_pro_then)
+
+log_and_pro_time
 
 log_and_pro_out = rstan::extract(log_and_pro)
 
@@ -315,7 +459,8 @@ log_and_pro_avg = lapply(log_and_pro_out, function(x) colMeans(as.matrix(x)))
 
 log_and_pro_ggdata =
   data.frame(
-    alpha = log_and_pro_out$alpha
+    alpha = log_and_pro_out$alpha,
+    beta = log_and_pro_out$beta
   ) %>%
   pivot_longer(
     cols = everything(),
@@ -325,8 +470,8 @@ log_and_pro_ggdata =
 
 log_and_pro_act =
   data.frame(
-    param = c("alpha"),
-    value = c(alpha_1_5)
+    param = c("alpha", "beta"),
+    value = c(alpha_1_5, beta_1_5)
   )
 
 ggplot() + 
@@ -358,4 +503,120 @@ ggplot() +
     scales = "free"
   )
 
+```
 
+## Multi-Logit Regression
+
+```{r}
+k_1_6 = 3 # Possible output variables for y
+d_1_6 = 2
+u_1_6 = runif(n_samples)
+x_1_6 = matrix(runif(n_samples * d_1_6), n_samples, d_1_6)
+beta_1_6 = matrix(seq(k_1_6 * d_1_6), d_1_6, k_1_6)
+x_beta_1_6 = x_1_6 %*% beta_1_6
+logit_inv_1_6 = 1/(1 + exp(-(beta_1_6 * x_1_6)))
+y_1_6 = u_1_6 < logit_inv_1_6
+
+multi_logit_data =
+  list(
+    N = n_samples,
+    D = d_1_6,
+    K = k_1_6,
+    x = x_1_6, 
+    y = y_1_6
+  )
+
+```
+
+```{stan, output.var = "multi_logit_model"}
+
+data {
+  int K;
+  int N;
+  int D;
+  int y[N];
+  matrix[N, D] x;
+}
+parameters {
+  matrix[D, K] beta;
+}
+model {
+  matrix[N, K] x_beta = x * beta;
+
+  to_vector(beta) ~ normal(0, 5);
+
+  for (n in 1:N)
+    y[n] ~ categorical_logit(x_beta[n]');
+}
+
+```
+
+```{r}
+
+multi_logit_then = Sys.time()
+
+multi_logit =
+  sampling(
+    multi_logit_model,
+    data = multi_logit_data,
+    iter = 1000,
+    chains = 3,
+    refresh = 50,
+    warmup = 250
+  )
+
+multi_logit_time = difftime(Sys.time(), multi_logit_then)
+
+multi_logit_time
+
+multi_logit_out = rstan::extract(multi_logit)
+
+multi_logit_avg = lapply(multi_logit_out, function(x) colMeans(as.matrix(x)))
+
+multi_logit_ggdata =
+  data.frame(
+    alpha = multi_logit_out$alpha,
+    beta = multi_logit_out$beta
+  ) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "param",
+    values_to = "value"
+  )
+
+multi_logit_act =
+  data.frame(
+    param = c("alpha", "beta"),
+    value = c(alpha_1_6, beta_1_6)
+  )
+
+ggplot() + 
+  geom_boxplot(
+    data = multi_logit_ggdata,
+    aes(
+      x = factor(param),
+      y = value,
+      color = param
+    )
+  ) + 
+  geom_point(
+    data = multi_logit_act,
+    aes(
+      x = factor(param),
+      y = value
+    )
+  ) + 
+  theme(
+    legend.position = "none"
+  ) + 
+  labs(
+    title = "1.5 Logistic and Probit Regression",
+    y = "Value",
+    x = "Parameter"
+  ) +
+  facet_wrap(
+    ~ param,
+    scales = "free"
+  )
+
+```
