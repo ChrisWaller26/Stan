@@ -21,7 +21,7 @@ options(mc.cores=parallel::detectCores())
 
 ```
 
-# Multi-Factor Log-Normal Model
+# Multi-Factor Log-Normal Model - Method 1
 
 ```{r}
 
@@ -187,5 +187,155 @@ multi_factor_sampling =
 multi_factor_out = rstan::extract(multi_factor_sampling)
 
 multi_factor_avg = lapply(multi_factor_out, function(x) colMeans(as.matrix(x)))
+
+```
+
+
+# Multi-Factor Log-Normal Model - Method 2
+
+```{r}
+
+risk_list = c("Average", "High")
+risk_n = length(risk_list)
+
+# Generate Pseudo-Data
+
+set.seed(1)
+
+factor_array =
+  array(
+    c(1, round(runif(region_n * coverage_n * risk_n - 1, 0.5, 2), 1)),
+    dim = c(region_n, coverage_n, risk_n)
+  ) 
+
+n_sims_2 = 50e3
+pseudo_mu_2 = 10
+pseudo_sigma_2 = 2
+
+loss_data_2 = 
+  data.frame(
+    loss_id     = seq(n_sims_2),
+    region_id   = sample(seq(region_n), replace = T, n_sims_2),
+    coverage_id = sample(seq(coverage_n), replace = T, n_sims_2),
+    risk_id     = sample(seq(risk_n), replace = T, n_sims_2)
+  ) %>%
+  mutate(
+    region   = region_list[region_id],
+    coverage = coverage_list[coverage_id],
+    risk     = risk_list[risk_id],
+    mu_adj   =
+      pseudo_mu_2 +
+          sapply(seq(nrow(.)),
+                 function(i)
+                   log(factor_array[.$region_id[i], 
+                                    .$coverage_id[i],
+                                    .$risk_id[i]
+                                    ]
+                       )
+                 ),
+    loss = rlnorm(n_sims_2, mu_adj, pseudo_sigma_2)
+    )
+
+stan_data_2 =
+  loss_data_2 %$%
+  list(
+    N = n_sims_2,
+    
+    region_n   = region_n,
+    coverage_n = coverage_n,
+    risk_n     = risk_n,
+    
+    region_id = region_id,
+    coverage_id = coverage_id,
+    risk_id = risk_id,
+    
+    loss = loss
+  )
+
+```
+
+```{stan, output.var = "multi_factor_model_2"}
+
+data {
+  int<lower=0> N;              // number of data items
+  int<lower=0> region_n;       // number of different regions
+  int<lower=0> coverage_n;     // number of different regions
+  int<lower=0> risk_n;         // number of different risk bands
+  
+  int<lower=0> region_id[N];   // region identifier
+  int<lower=0> coverage_id[N]; // region identifier
+  int<lower=0> risk_id[N];     // risk identifier
+  
+  vector[N]    loss;           // loss size
+}
+parameters {
+
+  // Distribution parameters
+
+  real mu;           
+  real<lower = 0> sigma; 
+
+  // Factor Array
+  
+  real<lower=0> factor_array[region_n, coverage_n, risk_n];
+  
+}
+
+model {
+
+  mu ~ normal(8, 2);
+  sigma ~ lognormal(0, 0.5);
+
+  for(i in 1:N){
+  
+  int region_i = region_id[i];
+  int coverage_i = coverage_id[i];
+  int risk_i = risk_id[i];
+  real mu_trans;
+  real factor_i;
+  
+  factor_array[region_i, coverage_i, risk_i] ~ normal(1, 0.5);
+  
+  if(region_i == 1 && coverage_i == 1 && risk_i == 1){
+    factor_i = 1;
+  }
+  else{
+    factor_i = factor_array[region_i, coverage_i, risk_i];
+  }
+
+    mu_trans =  mu + log(factor_i);
+  
+    loss[i] ~ lognormal(mu_trans, sigma);  // likelihood
+  
+  }
+  
+}
+
+```
+
+```{r}
+
+multi_factor_sampling_2 =
+  sampling(
+    multi_factor_model_2,
+    data = stan_data_2,
+    iter = 1000,
+    chains = 1,
+    refresh = 50,
+    warmup = 250
+  )
+
+multi_factor_out_2 = rstan::extract(multi_factor_sampling_2)
+
+multi_factor_avg_2 = 
+  lapply(multi_factor_out_2, 
+         function(x){
+           if(length(dim(x)) == 1){
+             mean(x)
+             } else{
+               apply(x, 2:length(dim(x)), mean)
+             }
+           }
+         )
 
 ```
