@@ -1,0 +1,191 @@
+---
+title: "Stan User Guide Models"
+author: "Chris Waller"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#####     Load Packages     #####
+
+library(rstan)
+library(dplyr)
+library(tidyr)
+library(magrittr)
+library(ggplot2)
+library(fitdistrplus)
+
+options(mc.cores=parallel::detectCores())
+
+```
+
+# Multi-Factor Log-Normal Model
+
+```{r}
+
+region_list = c("EMEA", "USC", "APAC")
+coverage_list = c("Property", "Casualty", "Financial Lines", "Specialty")
+
+region_n = length(region_list)
+coverage_n = length(coverage_list)
+
+# Generate Pseudo-Data
+
+region_factor = c(1, 2, 0.5)
+coverage_factor = c(1, 3, 2, 0.5)
+region_coverage_adj =
+  matrix(
+    c(1, 1.5, 1.5, 0.5,
+      2, 0.7, 1.1, 0.8,
+      3, 2.2, 2.2, 1.7
+      ),
+    nrow = region_n,
+    ncol = coverage_n,
+    byrow = TRUE
+  )
+
+pseudo_mu = 10
+pseudo_sigma = 2
+
+n_sims = 10e3
+
+loss_data = 
+  data.frame(
+    loss_id = seq(n_sims),
+    region_id   = sample(seq(region_n), replace = T, n_sims),
+    coverage_id = sample(seq(coverage_n), replace = T, n_sims)
+  ) %>%
+  mutate(
+    region = region_list[region_id],
+    coverage = coverage_list[coverage_id],
+    mu_adj =
+      pseudo_mu +
+      log(region_factor[region_id]) + 
+      log(coverage_factor[coverage_id]) +
+      sapply(seq(nrow(.)),
+             function(i)
+               log(region_coverage_adj[.$region_id[i], .$coverage_id[i]])
+             ),
+    loss = rlnorm(n_sims, mu_adj, pseudo_sigma)
+    )
+
+stan_data =
+  loss_data %$%
+  list(
+    N = n_sims,
+    region_n = region_n,
+    coverage_n = coverage_n,
+    region_id = region_id,
+    coverage_id = coverage_id,
+    loss = loss
+  )
+
+# High-level test
+
+pseudo_test = 
+  loss_data %>%
+  group_by(
+    region,
+    coverage
+  ) %>%
+  summarise(
+    mean(loss)
+  ) %>%
+  ungroup()
+
+```
+
+```{stan, output.var = "multi_factor_model"}
+
+data {
+  int<lower=0> N;              // number of data items
+  int<lower=0> region_n;       // number of different regions
+  int<lower=0> coverage_n;     // number of different coverages
+  
+  int<lower=0> region_id[N];   // region identifier
+  int<lower=0> coverage_id[N]; // coverage identifier
+  
+  vector[N]    loss;           // loss size
+}
+parameters {
+
+  // Distribution parameters
+
+  real mu;           
+  real<lower = 0> sigma; 
+
+  // Factor adjustments
+
+  real<lower=0> region_factor[region_n - 1];
+  real<lower=0> coverage_factor[coverage_n - 1];
+  
+  // Factor Correlation
+  
+  matrix<lower=0> [region_n, coverage_n] reg_cov_corr;
+  
+}
+
+model {
+
+  mu ~ normal(8, 2);
+  sigma ~ lognormal(0, 0.5);
+  region_factor ~ normal(1, 0.2);
+  coverage_factor ~ normal(1, 0.2);
+  to_row_vector(reg_cov_corr) ~ normal(1, 0.5);
+
+  for(i in 1:N){
+  
+  int region_i = region_id[i];
+  int coverage_i = coverage_id[i];
+  real region_factor_i;
+  real coverage_factor_i;
+  real mu_trans;
+  real reg_cov_corr_i;
+  
+  if(region_i == 1){
+    region_factor_i = 1;
+  }
+  else{
+    region_factor_i = region_factor[region_i - 1];
+  }
+  
+  if(coverage_i == 1){
+    coverage_factor_i = 1;
+  }
+  else{
+    coverage_factor_i = coverage_factor[coverage_i - 1];
+  }
+  
+  reg_cov_corr_i = reg_cov_corr[region_i, coverage_i];
+  
+    mu_trans =  mu + log(region_factor_i) + 
+                     log(coverage_factor_i) +
+                     log(reg_cov_corr_i);
+  
+    loss[i] ~ lognormal(mu_trans, sigma);  // likelihood
+  
+  }
+  
+}
+
+```
+
+```{r}
+
+multi_factor_sampling =
+  sampling(
+    multi_factor_model,
+    data = stan_data,
+    iter = 1000,
+    chains = 1,
+    refresh = 50,
+    warmup = 250
+  )
+
+multi_factor_out = rstan::extract(multi_factor_sampling)
+
+multi_factor_avg = lapply(multi_factor_out, function(x) colMeans(as.matrix(x)))
+
+```
